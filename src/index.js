@@ -1,34 +1,26 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const path = url.pathname.slice(1); // removes leading "/"
+    const path = url.pathname.slice(1).toUpperCase();
 
-    // Basic validation: must match "CVE-YYYY-NNNN"
     if (!/^CVE-\d{4}-\d{4,}$/.test(path)) {
-      return new Response(JSON.stringify({ error: "Invalid CVE ID format" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(JSON.stringify({ error: "Invalid CVE ID format" }), { status: 400 });
     }
 
-    try {
-      const cveData = await env.CVE_KV.get(path);
-      if (!cveData) {
-        return new Response(JSON.stringify({ error: "CVE not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
-      return new Response(cveData, {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    } catch (err) {
-      return new Response(JSON.stringify({ error: "Internal error", detail: err.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
+    const cveRaw = await env.CVE_KV.get(path);
+    if (!cveRaw) {
+      return new Response(JSON.stringify({ error: "CVE not found" }), { status: 404 });
     }
+
+    let epss = await env.CVE_KV.get(`epss:${path}`);
+    const response = JSON.parse(cveRaw);
+
+    if (epss) {
+      response.epss = JSON.parse(epss);
+    }
+
+    return new Response(JSON.stringify(response, null, 2), {
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }
