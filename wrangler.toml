@@ -1,5 +1,6 @@
 name = "cve-tips"
-type = "javascript"
+main = "src/index.js"
+compatibility_date = "2025-05-03"
 account_id = "45b9b661255d3ed8530e11c41d9ba56b"
 
 [[kv_namespaces]]
