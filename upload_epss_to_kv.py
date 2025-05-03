@@ -27,12 +27,14 @@ def main():
     print("Downloading EPSS feed...")
     url = "https://epss.cyentia.com/epss_scores-current.csv.gz"
     r = requests.get(url)
-    raw = gzip.decompress(r.content).decode("utf-8").splitlines()
-    reader = csv.DictReader(raw)
+    csv_bytes = gzip.decompress(r.content)
+    csv_text = csv_bytes.decode("utf-8")
+
+    reader = csv.DictReader(csv_text.splitlines())
 
     count = 0
     for row in reader:
-        cve = row["cve_id"]
+        cve = row["cve"]
         score = row["epss"]
         percentile = row["percentile"]
         upload_epss_score(cve, score, percentile)
