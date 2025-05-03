@@ -32,7 +32,7 @@ def main():
 
     count = 0
     for row in reader:
-        cve = row["cve"]
+        cve = row["cve_id"]
         score = row["epss"]
         percentile = row["percentile"]
         upload_epss_score(cve, score, percentile)
