@@ -1,6 +1,7 @@
 import requests
 import gzip
 import csv
+import io
 import os
 
 CF_ACCOUNT_ID = os.environ["CF_ACCOUNT_ID"]
@@ -30,7 +31,11 @@ def main():
     csv_bytes = gzip.decompress(r.content)
     csv_text = csv_bytes.decode("utf-8")
 
-    reader = csv.DictReader(csv_text.splitlines())
+    # Remove comment lines
+    lines = [line for line in csv_text.splitlines() if not line.startswith("#")]
+    cleaned_csv = "\n".join(lines)
+
+    reader = csv.DictReader(io.StringIO(cleaned_csv))
 
     count = 0
     for row in reader:
@@ -40,7 +45,7 @@ def main():
         upload_epss_score(cve, score, percentile)
         count += 1
 
-    print(f"Uploaded {count} EPSS scores to KV.")
+    print(f"✅ Uploaded {count} EPSS scores to KV.")
 
 if __name__ == "__main__":
     main()
