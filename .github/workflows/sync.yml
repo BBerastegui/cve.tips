@@ -1,8 +1,6 @@
 name: Sync CVE Feed to Cloudflare
 
 on:
-  schedule:
-    - cron: "0 * * * *" # every hour
   workflow_dispatch:
 
 jobs:
