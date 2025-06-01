@@ -40,7 +40,9 @@ def load_epss_scores():
     url = "https://epss.cyentia.com/epss_scores-current.csv.gz"
     r = requests.get(url)
     csv_data = gzip.decompress(r.content).decode("utf-8")
-    reader = csv.DictReader(io.StringIO(csv_data))
+    # Remove comment lines
+    lines = [line for line in csv_data.splitlines() if not line.startswith("#")]
+    reader = csv.DictReader(io.StringIO("\n".join(lines)))
     scores = {}
     for row in reader:
         scores[row["cve"]] = {
