@@ -1,5 +1,5 @@
 name = "cve-tips"
-main = "src/index.js"
+main = "src/index.ts"
 compatibility_date = "2025-05-03"
 account_id = "45b9b661255d3ed8530e11c41d9ba56b"
 
