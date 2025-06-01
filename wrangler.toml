@@ -3,6 +3,7 @@ main = "src/index.js"
 compatibility_date = "2025-05-03"
 account_id = "45b9b661255d3ed8530e11c41d9ba56b"
 
-[[kv_namespaces]]
-binding = "CVE_KV"
-id = "1f6c6eeda1064b198ea1cd2885734bca"
+[r2_buckets]
+binding = "R2"
+bucket_name = "cve-tips"
+preview_bucket_name = "cve-tips"
