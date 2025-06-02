@@ -36,7 +36,7 @@ def get_existing_object(key):
 
 def load_epss_scores():
     print("⬇️  Fetching EPSS CSV feed...")
-    url = "https://epss.cyentia.com/epss_scores.csv.gz"
+    url = "https://www.first.org/epss/data/csv/epss_scores-current.csv.gz"
     r = requests.get(url)
     r.raise_for_status()
 
