@@ -17,6 +17,16 @@ s3 = boto3.client(
     endpoint_url=R2_ENDPOINT_URL,
 )
 
+def enrich_cve_item(cve_data, epss_map):
+    cve_id = cve_data.get("cve", {}).get("CVE_data_meta", {}).get("ID")
+    epss_info = epss_map.get(cve_id)
+    if epss_info:
+        cve_data["epss"] = {
+            "score": epss_info["score"],
+            "percentile": epss_info["percentile"]
+        }
+    return cve_data
+
 def upload_to_r2(key, data):
     s3.put_object(
         Bucket=R2_BUCKET,
@@ -35,19 +45,21 @@ def get_existing_object(key):
         raise
 
 def load_epss_scores():
+    import requests, csv, gzip
+    from io import BytesIO, TextIOWrapper
+
     print("⬇️  Fetching EPSS CSV feed...")
-    url = "https://www.first.org/epss/data/epss_scores-current.csv.gz"
+    url = "https://epss.cybertrust.nist.gov/epss_scores-current.csv.gz"
     r = requests.get(url)
     r.raise_for_status()
 
-    data = r.content
-    scores = {}
-    with gzip.open(StringIO(data.decode()), mode='rt') as f:
-        reader = csv.DictReader(filter(lambda row: not row.startswith('#'), f))
-        for row in reader:
-            scores[row["cve"]] = {
+    buf = BytesIO(r.content)
+    with gzip.open(buf, mode='rt') as f:
+        reader = csv.DictReader(f)
+        return {
+            row["cve"]: {
                 "score": float(row["epss"]),
                 "percentile": float(row["percentile"])
             }
-    print(f"✅ Loaded {len(scores)} EPSS entries")
-    return scores
+            for row in reader
+        }
