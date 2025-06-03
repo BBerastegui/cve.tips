@@ -3,94 +3,98 @@ export default {
     const url = new URL(request.url);
     const cveId = url.pathname.replace("/", "").toUpperCase();
 
-    if (!/^CVE-\d{4}-\d{4,}$/.test(cveId)) {
+    if (!/^CVE-\d{4}-\d+$/.test(cveId)) {
       return new Response("Invalid CVE format", { status: 400 });
     }
 
-    const r2Key = `${cveId}.json`;
+    const key = `${cveId}.json`;
 
+    // Try fetching from R2
     try {
-      const object = await env.R2.get(r2Key);
+      const object = await env.R2.get(key);
       if (object) {
-        const data = await object.json();
-        return Response.json(data);
+        const data = await object.text();
+        return new Response(data, {
+          headers: { "Content-Type": "application/json" },
+        });
       }
     } catch (err) {
-      console.error("R2 read error:", err);
+      console.error("Failed to read from R2", err);
     }
 
     console.log(`Fetching CVEs from NVD for ${cveId}`);
 
-    const [_, yearStr, idStr] = cveId.split("-");
-    const year = parseInt(yearStr, 10);
-    const month = getRandomMonth(); // Pull one random month to spread out requests
+    const [, year, number] = cveId.match(/^CVE-(\d{4})-(\d+)$/) || [];
+    const month = getCveMonthFromId(number);
+    const startDate = `${year}-${month}-01T00:00:00.000Z`;
+    const endDate = `${year}-${month}-28T23:59:59.999Z`; // Safe fallback end
 
-    const pubStartDate = `${year}-${pad(month)}-01T00:00:00.000Z`;
-    const pubEndDate = `${year}-${pad(month)}-${pad(getLastDay(year, month))}T23:59:59.999Z`;
-
-    const nvdUrl = `https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate=${pubStartDate}&pubEndDate=${pubEndDate}`;
+    const nvdUrl = `https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate=${startDate}&pubEndDate=${endDate}&resultsPerPage=200`;
 
     let cveItems = [];
     try {
       const res = await fetch(nvdUrl);
       if (!res.ok) throw new Error(`Failed to fetch CVEs from NVD (status ${res.status})`);
       const nvdData = await res.json();
-      cveItems = nvdData.vulnerabilities.map((v) => v.cve);
+      cveItems = nvdData.vulnerabilities.map((v) => v.cve).filter(Boolean);
     } catch (err) {
       console.error("Failed to fetch CVEs from NVD", err);
       return new Response("Failed to fetch CVEs", { status: 500 });
     }
 
-    const epssMap = await enrichWithEPSS(cveItems.map((cve) => cve.id));
+    const cveIds = cveItems.map((item) => item.id);
+    const epssMap = await enrichWithEPSS(cveIds);
     const enrichedCVEs = cveItems.map((item) => enrichCVE(item, epssMap));
 
-    await Promise.allSettled(
-      enrichedCVEs.map((cve) =>
-        env.R2.put(`${cve.id}.json`, JSON.stringify(cve), { httpMetadata: { contentType: "application/json" } })
-      )
+    // Save to R2
+    await Promise.all(
+      enrichedCVEs.map(async (item) => {
+        const id = item.id;
+        const content = JSON.stringify(item, null, 2);
+        await env.R2.put(`${id}.json`, content);
+      })
     );
 
-    const requestedCVE = enrichedCVEs.find((cve) => cve.id === cveId);
-    if (!requestedCVE) {
-      return new Response("CVE not found in batch", { status: 404 });
+    const found = enrichedCVEs.find((item) => item.id === cveId);
+    if (found) {
+      return new Response(JSON.stringify(found, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
-    return Response.json(requestedCVE);
+    return new Response("CVE not found", { status: 404 });
   },
 };
 
-function getRandomMonth() {
-  return Math.floor(Math.random() * 12) + 1;
-}
-
-function pad(n) {
-  return n.toString().padStart(2, "0");
-}
-
-function getLastDay(year, month) {
-  return new Date(year, month, 0).getDate(); // Month is 1-indexed
+function getCveMonthFromId(idStr) {
+  const id = parseInt(idStr, 10);
+  const bucket = Math.floor(id % 1000 / 100); // Simple bucketing
+  return `${bucket + 1}`.padStart(2, "0"); // Month-like spread
 }
 
 function enrichCVE(cve, epssMap) {
-  const epss = epssMap[cve.id];
-  if (epss) {
-    cve.epss = {
-      score: parseFloat(epss.epss),
-      percentile: parseFloat(epss.percentile),
-      date: epss.date,
-    };
+  const score = epssMap[cve.id];
+  if (score) {
+    cve.epss = score;
   }
   return cve;
 }
 
 async function enrichWithEPSS(cveIds) {
-  const ids = cveIds.join(",");
-  const epssUrl = `https://api.first.org/data/v1/epss?cve=${ids}`;
-
+  const endpoint = `https://api.first.org/data/v1/epss?cve=${cveIds.join(",")}`;
   try {
-    const res = await fetch(epssUrl);
-    const data = await res.json();
-    return Object.fromEntries(data.data.map((e) => [e.cve, e]));
+    const res = await fetch(endpoint);
+    if (!res.ok) throw new Error("Failed to fetch EPSS data");
+    const json = await res.json();
+
+    const map = {};
+    for (const item of json.data) {
+      map[item.cve] = {
+        score: parseFloat(item.epss),
+        percentile: parseFloat(item.percentile),
+      };
+    }
+    return map;
   } catch (err) {
     console.error("EPSS enrichment failed", err);
     return {};
