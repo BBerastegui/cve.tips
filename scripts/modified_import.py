@@ -5,7 +5,7 @@ import json
 import hashlib
 from io import BytesIO
 from datetime import datetime
-from utils import upload_to_r2, load_epss_scores, get_existing_object
+from scripts.utils import upload_to_r2, load_epss_scores, get_existing_object
 
 # Constants
 NVD_BASE = "https://nvd.nist.gov/feeds/json/cve/1.1"
