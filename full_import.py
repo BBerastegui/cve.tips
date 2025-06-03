@@ -1,73 +1,50 @@
-import requests
-import csv
-import gzip
-import io
-import json
+import sys
 import os
-from datetime import datetime
-from utils import upload_to_r2, list_existing_keys, get_nvd_cve_url
+import json
+import boto3
+import requests
+from utils import enrich_cve_item, load_epss_scores
 
-R2_BUCKET = os.environ.get("R2_BUCKET", "cve-tips")
+BUCKET = os.environ["R2_BUCKET"]
+REGION = "auto"
+ENDPOINT = f"https://{REGION}.r2.cloudflarestorage.com"
 
-def load_epss_scores():
-    url = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
-    print(f"⬇️  Downloading EPSS scores from {url}...")
+def object_exists(s3, key):
+    try:
+        s3.head_object(Bucket=BUCKET, Key=key)
+        return True
+    except s3.exceptions.ClientError as e:
+        if e.response["ResponseMetadata"]["HTTPStatusCode"] == 404:
+            return False
+        raise
+
+def process_year(year: int):
+    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={year}-01-01T00:00:00Z&pubEndDate={year}-12-31T23:59:59Z"
+    print(f"⬇️ Downloading CVEs for {year}...")
     r = requests.get(url)
     r.raise_for_status()
-    epss_map = {}
-    with gzip.open(io.BytesIO(r.content), 'rt', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            cve = row['cve'].strip()
-            epss_map[cve] = {
-                "epss": float(row['epss']),
-                "percentile": float(row['percentile'])
-            }
-    print(f"✅ Loaded {len(epss_map)} EPSS scores.")
-    return epss_map
+    cve_items = r.json().get("vulnerabilities", [])
 
-def get_cve_list(year: int):
-    url = get_nvd_cve_url(year)
-    print(f"⬇️  Downloading CVE data for {year}...")
-    r = requests.get(url)
-    r.raise_for_status()
-    with gzip.open(io.BytesIO(r.content), 'rt', encoding='utf-8') as f:
-        data = json.load(f)
-    return data['CVE_Items']
+    print("⬇️ Loading EPSS scores...")
+    epss_scores = load_epss_scores()
 
-def format_entry(cve, epss_map):
-    cve_id = cve['cve']['CVE_data_meta']['ID']
-    description = next((d['value'] for d in cve['cve']['description']['description_data'] if d['lang'] == 'en'), "")
-    published = cve.get('publishedDate', "")
-    epss_data = epss_map.get(cve_id, {})
-    return {
-        "id": cve_id,
-        "description": description,
-        "published": published,
-        "epss": epss_data.get("epss"),
-        "percentile": epss_data.get("percentile")
-    }
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        endpoint_url=ENDPOINT,
+    )
 
-def main():
-    existing_keys = list_existing_keys()
-    current_year = datetime.now().year
-    epss_map = load_epss_scores()
-
-    for year in range(1999, current_year + 1):
-        try:
-            cve_items = get_cve_list(year)
-            print(f"Processing {len(cve_items)} CVEs from {year}")
-            for item in cve_items:
-                cve_id = item['cve']['CVE_data_meta']['ID']
-                key = f"cves/{cve_id}.json"
-                if key in existing_keys:
-                    print(f"✅ Skipping {cve_id}, already exists.")
-                    continue
-                entry = format_entry(item, epss_map)
-                upload_to_r2(key, json.dumps(entry))
-        except Exception as e:
-            print(f"❌ Error processing year {year}: {e}")
+    for item in cve_items:
+        cve_id = item["cve"]["id"]
+        key = f"enriched/{cve_id}.json"
+        if object_exists(s3, key):
+            print(f"✅ Skipping existing {cve_id}")
+            continue
+        enriched = enrich_cve_item(item, epss_scores)
+        s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(enriched), ContentType="application/json")
+        print(f"✅ Uploaded {cve_id}")
 
 if __name__ == "__main__":
-    print("⬇️  Fetching EPSS CSV feed...")
-    main()
+    year = int(sys.argv[1])
+    process_year(year)
