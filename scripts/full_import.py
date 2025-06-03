@@ -1,50 +1,67 @@
 import sys
-import os
+import io
 import json
-import boto3
+import gzip
 import requests
-from scripts.utils import load_epss_scores, should_upload, enrich_cve_item, get_s3_client
 
-BUCKET = os.environ["R2_BUCKET"]
-REGION = "auto"
-ENDPOINT = f"https://{REGION}.r2.cloudflarestorage.com"
+from script.utils import load_epss_scores, enrich_cve_item, get_s3_client, should_upload
 
-def object_exists(s3, key):
-    try:
-        s3.head_object(Bucket=BUCKET, Key=key)
-        return True
-    except s3.exceptions.ClientError as e:
-        if e.response["ResponseMetadata"]["HTTPStatusCode"] == 404:
-            return False
-        raise
+def process_year(year):
+    print(f"⬇️  Downloading CVEs for {year}...")
 
-def process_year(year: int):
-    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={year}-01-01T00:00:00Z&pubEndDate={year}-12-31T23:59:59Z"
-    print(f"⬇️ Downloading CVEs for {year}...")
-    r = requests.get(url)
-    r.raise_for_status()
-    cve_items = r.json().get("vulnerabilities", [])
+    if int(year) < 2003:
+        url = f"https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-{year}.json.gz"
+        print(f"⬇️  Using NVD JSON Feed for year {year}")
+        r = requests.get(url)
+        r.raise_for_status()
+        with gzip.GzipFile(fileobj=io.BytesIO(r.content)) as gz:
+            data = json.load(gz)
+        cve_items = data["CVE_Items"]
+    else:
+        pub_start = f"{year}-01-01T00:00:00Z"
+        pub_end = f"{year}-12-31T23:59:59Z"
+        url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={pub_start}&pubEndDate={pub_end}"
+        print(f"⬇️  Using NVD API for year {year}")
+        r = requests.get(url)
+        r.raise_for_status()
+        data = r.json()
+        cve_items = [item["cve"] for item in data.get("vulnerabilities", [])]
 
-    print("⬇️ Loading EPSS scores...")
-    epss_scores = load_epss_scores()
+    print(f"ℹ️  Found {len(cve_items)} CVEs for {year}")
+    return cve_items
 
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-        endpoint_url=ENDPOINT,
+def upload_to_r2(key, json_data):
+    s3 = get_s3_client()
+    if not should_upload(s3, bucket_name=os.environ["R2_BUCKET"], key=key):
+        print(f"⏭️  Skipping {key}, already exists")
+        return
+
+    s3.put_object(
+        Bucket=os.environ["R2_BUCKET"],
+        Key=key,
+        Body=json.dumps(json_data),
+        ContentType="application/json"
     )
+    print(f"✅ Uploaded {key}")
 
-    for item in cve_items:
-        cve_id = item["cve"]["id"]
-        key = f"enriched/{cve_id}.json"
-        if object_exists(s3, key):
-            print(f"✅ Skipping existing {cve_id}")
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python full_import.py <year>")
+        sys.exit(1)
+
+    year = sys.argv[1]
+
+    epss_map = load_epss_scores()
+    cve_items = process_year(year)
+
+    for raw_cve in cve_items:
+        cve_id = raw_cve.get("cve", {}).get("CVE_data_meta", {}).get("ID") or raw_cve.get("id")
+        if not cve_id:
             continue
-        enriched = enrich_cve_item(item, epss_scores)
-        s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(enriched), ContentType="application/json")
-        print(f"✅ Uploaded {cve_id}")
+
+        enriched = enrich_cve_item(raw_cve, epss_map)
+        key = f"enriched/{cve_id}.json"
+        upload_to_r2(key, enriched)
 
 if __name__ == "__main__":
-    year = int(sys.argv[1])
-    process_year(year)
+    main()
