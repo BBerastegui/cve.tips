@@ -3,7 +3,7 @@ import os
 import json
 import boto3
 import requests
-from utils import enrich_cve_item, load_epss_scores
+from utils import load_epss_scores, should_upload, enrich_cve_item, get_s3_client
 
 BUCKET = os.environ["R2_BUCKET"]
 REGION = "auto"
