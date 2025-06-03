@@ -4,7 +4,7 @@ import json
 import gzip
 import requests
 
-from script.utils import load_epss_scores, enrich_cve_item, get_s3_client, should_upload
+from scripts.utils import load_epss_scores, enrich_cve_item, get_s3_client, should_upload
 
 def process_year(year):
     print(f"⬇️  Downloading CVEs for {year}...")
