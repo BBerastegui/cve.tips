@@ -69,7 +69,7 @@ async function fetchAndEnrichCVEs(cveIds) {
 
   for (const id of cveIds) {
     try {
-      const url = `https://services.nvd.nist.gov/rest/json/cve/2.0?cveId=${id}`;
+      const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${id}`;
       const res = await fetch(url);
       if (!res.ok) {
         console.warn(`⚠️ NVD fetch failed for ${id} (${res.status})`);
