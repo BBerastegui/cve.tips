@@ -1,107 +1,78 @@
 import os
 import sys
-import time
-import json
-import datetime
 import requests
+import json
+from datetime import datetime, timedelta
+from scripts.utils import load_epss_scores, enrich_cve_item, get_s3_client, should_upload
 
-from scripts.utils import (
-    load_epss_scores,
-    enrich_cve_item,
-    get_s3_client,
-    should_upload
-)
+NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+MAX_DAYS = 120
 
-API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-RESULTS_PER_PAGE = 2000
-REQUEST_DELAY = 1.6  # seconds (NVD limit = 5 requests in 30 sec → 1 every 6 sec, we use 1.6s to stay safe)
-
-def get_cve_data(start_date, end_date):
+def fetch_cves_in_range(start_date, end_date):
     print(f"⬇️  Fetching CVEs from {start_date} to {end_date}")
+    cve_items = []
     start_index = 0
-    total_results = None
-    all_items = []
-
     while True:
         params = {
-            "pubStartDate": f"{start_date}T00:00:00.000Z",
-            "pubEndDate": f"{end_date}T23:59:59.999Z",
-            "resultsPerPage": RESULTS_PER_PAGE,
-            "startIndex": start_index
+            "pubStartDate": start_date.strftime(DATE_FORMAT),
+            "pubEndDate": end_date.strftime(DATE_FORMAT),
+            "startIndex": start_index,
+            "resultsPerPage": 2000,
         }
-        headers = {}
-        api_key = os.getenv("NVD_API_KEY")
-        if api_key:
-            headers["apiKey"] = api_key
-
-        r = requests.get(API_URL, params=params, headers=headers)
+        r = requests.get(NVD_API_BASE, params=params)
         r.raise_for_status()
         data = r.json()
-
-        if total_results is None:
-            total_results = data.get("totalResults", 0)
-            print(f"   → Found {total_results} CVEs")
-
-        all_items.extend(data.get("vulnerabilities", []))
-        start_index += RESULTS_PER_PAGE
-
-        if start_index >= total_results:
+        cve_items.extend(data.get("vulnerabilities", []))
+        if start_index + 2000 >= data.get("totalResults", 0):
             break
-
-        time.sleep(REQUEST_DELAY)
-
-    return [item["cve"] for item in all_items if "cve" in item]
-
+        start_index += 2000
+    return cve_items
 
 def process_year(year):
-    start_date = f"{year}-01-01"
-    end_date = f"{year}-12-31"
-    return get_cve_data(start_date, end_date)
+    print(f"⬇️  Downloading CVEs for {year}...")
+    year_start = datetime(year, 1, 1)
+    year_end = datetime(year, 12, 31, 23, 59, 59, 999000)
 
+    all_cves = []
+    current = year_start
 
-def upload_to_r2(cve_items, epss_map):
-    s3 = get_s3_client()
-    bucket = os.environ["R2_BUCKET"]
+    while current < year_end:
+        next_batch = min(current + timedelta(days=MAX_DAYS), year_end)
+        all_cves.extend(fetch_cves_in_range(current, next_batch))
+        current = next_batch + timedelta(seconds=1)
 
-    for cve in cve_items:
-        cve_id = cve.get("cveMetadata", {}).get("cveId")
-        if not cve_id:
-            continue
-
-        key = f"enriched/{cve_id}.json"
-        if not should_upload(s3, bucket, key):
-            print(f"🔁  Skipping {cve_id} (already exists)")
-            continue
-
-        enriched = enrich_cve_item(cve, epss_map)
-        json_data = json.dumps(enriched, indent=2)
-
-        s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=json_data.encode("utf-8"),
-            ContentType="application/json"
-        )
-        print(f"✅ Uploaded {cve_id}")
-
+    return all_cves
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         print("Usage: python -m scripts.full_import <year>")
         sys.exit(1)
 
     year = int(sys.argv[1])
-    print(f"📦 Processing CVEs for year {year}")
-
-    print("⬇️  Loading EPSS scores...")
     epss_map = load_epss_scores()
-
-    print(f"⬇️  Downloading CVEs for {year}...")
     cve_items = process_year(year)
 
-    print(f"⬆️  Uploading {len(cve_items)} enriched CVEs to R2...")
-    upload_to_r2(cve_items, epss_map)
+    s3 = get_s3_client()
+    bucket = os.environ["R2_BUCKET"]
 
+    for item in cve_items:
+        cve_data = item.get("cve")
+        if not cve_data:
+            continue
+        cve_id = cve_data["id"]
+        key = f"enriched/{cve_id}.json"
+        if not should_upload(s3, bucket, key):
+            print(f"✅ Skipping {cve_id}, already uploaded.")
+            continue
+        enriched = enrich_cve_item(cve_data, epss_map)
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=json.dumps(enriched).encode("utf-8"),
+            ContentType="application/json"
+        )
+        print(f"⬆️  Uploaded {cve_id}")
 
 if __name__ == "__main__":
     main()
