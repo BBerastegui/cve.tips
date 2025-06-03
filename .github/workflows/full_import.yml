@@ -1,4 +1,4 @@
-name: Full CVE Import
+name: Full Import
 
 on:
   workflow_dispatch:
@@ -6,21 +6,20 @@ on:
 jobs:
   import:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        year: [2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011,
+               2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021,
+               2022, 2023, 2024]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run full CVE + EPSS import to R2
-        run: python full_import.py
+          python-version: '3.11'
+      - run: pip install boto3 requests
+      - run: python full_import.py ${{ matrix.year }}
         env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
