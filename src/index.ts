@@ -9,7 +9,7 @@ export default {
 
     const key = `${cveId}.json`;
 
-    // Try fetching from R2
+    // Try fetching from R2 first
     try {
       const object = await env.R2.get(key);
       if (object) {
@@ -19,43 +19,24 @@ export default {
         });
       }
     } catch (err) {
-      console.error("Failed to read from R2", err);
+      console.error("❌ Failed to read from R2", err);
     }
 
-    console.log(`Fetching CVEs from NVD for ${cveId}`);
+    console.log(`📥 Fetching CVEs from NVD for ${cveId}`);
 
-    const [, year, number] = cveId.match(/^CVE-(\d{4})-(\d+)$/) || [];
-    const month = getCveMonthFromId(number);
-    const startDate = `${year}-${month}-01T00:00:00.000Z`;
-    const endDate = `${year}-${month}-28T23:59:59.999Z`; // Safe fallback end
+    const nearbyIds = getNearbyCVEIds(cveId, 4); // 1 requested + 4 nearby
+    const enriched = await fetchAndEnrichCVEs(nearbyIds);
 
-    const nvdUrl = `https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate=${startDate}&pubEndDate=${endDate}&resultsPerPage=200`;
-
-    let cveItems = [];
-    try {
-      const res = await fetch(nvdUrl);
-      if (!res.ok) throw new Error(`Failed to fetch CVEs from NVD (status ${res.status})`);
-      const nvdData = await res.json();
-      cveItems = nvdData.vulnerabilities.map((v) => v.cve).filter(Boolean);
-    } catch (err) {
-      console.error("Failed to fetch CVEs from NVD", err);
-      return new Response("Failed to fetch CVEs", { status: 500 });
-    }
-
-    const cveIds = cveItems.map((item) => item.id);
-    const epssMap = await enrichWithEPSS(cveIds);
-    const enrichedCVEs = cveItems.map((item) => enrichCVE(item, epssMap));
-
-    // Save to R2
+    // Store them in R2
     await Promise.all(
-      enrichedCVEs.map(async (item) => {
+      enriched.map(async (item) => {
         const id = item.id;
         const content = JSON.stringify(item, null, 2);
         await env.R2.put(`${id}.json`, content);
       })
     );
 
-    const found = enrichedCVEs.find((item) => item.id === cveId);
+    const found = enriched.find((item) => item.id === cveId);
     if (found) {
       return new Response(JSON.stringify(found, null, 2), {
         headers: { "Content-Type": "application/json" },
@@ -66,27 +47,67 @@ export default {
   },
 };
 
-function getCveMonthFromId(idStr) {
-  const id = parseInt(idStr, 10);
-  const bucket = Math.floor(id % 1000 / 100); // Simple bucketing
-  return `${bucket + 1}`.padStart(2, "0"); // Month-like spread
-}
+// Generate CVE IDs near the requested one (same year, next 4 numerically)
+function getNearbyCVEIds(baseId, extra = 4) {
+  const match = baseId.match(/^CVE-(\d{4})-(\d+)$/);
+  if (!match) return [baseId];
+  const year = match[1];
+  const baseNum = parseInt(match[2], 10);
 
-function enrichCVE(cve, epssMap) {
-  const score = epssMap[cve.id];
-  if (score) {
-    cve.epss = score;
+  const ids = [];
+  for (let i = 0; i <= extra; i++) {
+    const num = baseNum + i;
+    const padded = String(num).padStart(4, "0");
+    ids.push(`CVE-${year}-${padded}`);
   }
-  return cve;
+  return ids;
 }
 
-async function enrichWithEPSS(cveIds) {
-  const endpoint = `https://api.first.org/data/v1/epss?cve=${cveIds.join(",")}`;
-  try {
-    const res = await fetch(endpoint);
-    if (!res.ok) throw new Error("Failed to fetch EPSS data");
-    const json = await res.json();
+// Fetch CVEs from NVD and enrich with EPSS in batch
+async function fetchAndEnrichCVEs(cveIds) {
+  const enriched = [];
 
+  for (const id of cveIds) {
+    try {
+      const url = `https://services.nvd.nist.gov/rest/json/cve/2.0?cveId=${id}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn(`⚠️ NVD fetch failed for ${id} (${res.status})`);
+        continue;
+      }
+      const json = await res.json();
+      const item = json.vulnerabilities?.[0]?.cve;
+      if (item) enriched.push(item);
+    } catch (err) {
+      console.warn(`⚠️ Error fetching ${id} from NVD`, err);
+    }
+  }
+
+  // Fetch EPSS data in one batch
+  const idsToEnrich = enriched.map((cve) => cve.id);
+  const epssMap = await fetchEPSSBatch(idsToEnrich);
+
+  for (const cve of enriched) {
+    const epss = epssMap[cve.id];
+    if (epss) {
+      cve.epss = epss;
+    }
+  }
+
+  return enriched;
+}
+
+// Fetch EPSS data for a list of CVE IDs in one call
+async function fetchEPSSBatch(cveIds) {
+  if (cveIds.length === 0) return {};
+
+  const query = cveIds.map((id) => encodeURIComponent(id)).join(",");
+  const apiUrl = `https://api.first.org/data/v1/epss?cve=${query}`;
+
+  try {
+    const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error(`EPSS fetch failed (${res.status})`);
+    const json = await res.json();
     const map = {};
     for (const item of json.data) {
       map[item.cve] = {
@@ -96,7 +117,7 @@ async function enrichWithEPSS(cveIds) {
     }
     return map;
   } catch (err) {
-    console.error("EPSS enrichment failed", err);
+    console.error("❌ EPSS batch fetch failed", err);
     return {};
   }
 }
