@@ -5,11 +5,11 @@ import csv
 import requests
 import boto3
 from botocore.exceptions import ClientError
+import io  # Ensure this import is present at the top of your utils.py
 
-# Load EPSS scores and return a mapping: CVE-ID -> {score, percentile}
 def load_epss_scores():
     print("⬇️  Loading EPSS scores...")
-    url = "https://www.first.org/epss/data/epss_scores-current.csv.gz"
+    url = "https://epss.cyentia.com/epss_scores-current.csv.gz"
     print("⬇️  Fetching EPSS CSV feed...")
     r = requests.get(url)
     r.raise_for_status()
