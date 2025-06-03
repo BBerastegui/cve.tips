@@ -5,7 +5,7 @@ import csv
 import requests
 import boto3
 from botocore.exceptions import ClientError
-import io  # Ensure this import is present at the top of your utils.py
+import io
 
 def load_epss_scores():
     print("⬇️  Loading EPSS scores...")
@@ -15,13 +15,17 @@ def load_epss_scores():
     r.raise_for_status()
 
     epss_map = {}
+
     with gzip.open(io.BytesIO(r.content), mode='rt', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
+        # Skip metadata line starting with '#'
+        lines = (line for line in f if not line.startswith("#"))
+        reader = csv.DictReader(lines)
         for row in reader:
             epss_map[row["cve"]] = {
                 "score": float(row["epss"]),
                 "percentile": float(row["percentile"])
             }
+
     return epss_map
 
 # Decide whether to skip uploading if the file already exists in R2
