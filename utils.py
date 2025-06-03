@@ -1,65 +1,57 @@
 import os
 import json
+import gzip
 import csv
-import boto3
 import requests
-from io import StringIO
+import boto3
+from botocore.exceptions import ClientError
 
-R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
-R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
-R2_BUCKET = os.environ.get("R2_BUCKET")
-R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL")
+# Load EPSS scores and return a mapping: CVE-ID -> {score, percentile}
+def load_epss_scores():
+    print("⬇️  Loading EPSS scores...")
+    url = "https://www.first.org/epss/data/epss_scores-current.csv.gz"
+    print("⬇️  Fetching EPSS CSV feed...")
+    r = requests.get(url)
+    r.raise_for_status()
 
-s3 = boto3.client(
-    "s3",
-    aws_access_key_id=R2_ACCESS_KEY_ID,
-    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-    endpoint_url=R2_ENDPOINT_URL,
-)
+    epss_map = {}
+    with gzip.open(io.BytesIO(r.content), mode='rt', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            epss_map[row["cve"]] = {
+                "score": float(row["epss"]),
+                "percentile": float(row["percentile"])
+            }
+    return epss_map
 
+# Decide whether to skip uploading if the file already exists in R2
+def should_upload(s3, bucket_name, key):
+    try:
+        s3.head_object(Bucket=bucket_name, Key=key)
+        return False  # already exists
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return True  # does not exist
+        raise
+
+# Inject EPSS into CVE JSON
 def enrich_cve_item(cve_data, epss_map):
     cve_id = cve_data.get("cve", {}).get("CVE_data_meta", {}).get("ID")
     epss_info = epss_map.get(cve_id)
+
     if epss_info:
         cve_data["epss"] = {
             "score": epss_info["score"],
             "percentile": epss_info["percentile"]
         }
+
     return cve_data
 
-def upload_to_r2(key, data):
-    s3.put_object(
-        Bucket=R2_BUCKET,
-        Key=key,
-        Body=json.dumps(data),
-        ContentType="application/json"
+# Setup boto3 S3 client
+def get_s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{os.environ['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"]
     )
-
-def get_existing_object(key):
-    try:
-        result = s3.get_object(Bucket=R2_BUCKET, Key=key)
-        return json.load(result["Body"])
-    except s3.exceptions.ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
-            return None
-        raise
-
-def load_epss_scores():
-    import requests, csv, gzip
-    from io import BytesIO, TextIOWrapper
-
-    print("⬇️  Fetching EPSS CSV feed...")
-    url = "https://epss.cybertrust.nist.gov/epss_scores-current.csv.gz"
-    r = requests.get(url)
-    r.raise_for_status()
-
-    buf = BytesIO(r.content)
-    with gzip.open(buf, mode='rt') as f:
-        reader = csv.DictReader(f)
-        return {
-            row["cve"]: {
-                "score": float(row["epss"]),
-                "percentile": float(row["percentile"])
-            }
-            for row in reader
-        }
