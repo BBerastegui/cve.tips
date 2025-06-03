@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install boto3 requests
-      - run: python full_import.py ${{ matrix.year }}
+      - run: python -m scripts.full_import ${{ matrix.year }}
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
