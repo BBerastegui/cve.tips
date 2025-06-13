@@ -1,0 +1,13 @@
+{
+  "name": "cve.tips",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test dist/tests/**/*.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
