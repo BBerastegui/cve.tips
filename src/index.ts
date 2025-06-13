@@ -121,3 +121,4 @@ async function fetchEPSSBatch(cveIds) {
     return {};
   }
 }
+export { getNearbyCVEIds, fetchEPSSBatch };
