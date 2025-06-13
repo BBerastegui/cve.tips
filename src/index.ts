@@ -1,7 +1,7 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const cveId = url.pathname.replace("/", "").toUpperCase();
+    const cveId = url.pathname.replace(/^\/+|\/+$/g, "").toUpperCase();
 
     if (!/^CVE-\d{4}-\d+$/.test(cveId)) {
       return new Response("Invalid CVE format", { status: 400 });
