@@ -1,7 +1,40 @@
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const cveId = url.pathname.replace(/^\/+|\/+$/g, "").toUpperCase();
+import {
+  OpenAPIRoute,
+  OpenAPIRouter,
+  Path,
+  Str,
+  DataOf,
+} from "@cloudflare/itty-router-openapi";
+
+class CVEFetchRoute extends OpenAPIRoute {
+  static schema = {
+    tags: ["CVE"],
+    summary: "Fetch CVE details",
+    parameters: {
+      cveId: Path(Str, {
+        description: "CVE identifier",
+        example: "CVE-2024-1234",
+      }),
+    },
+    responses: {
+      "200": {
+        description: "CVE details returned",
+        schema: {
+          id: Str,
+        },
+      },
+      "400": { description: "Invalid CVE format" },
+      "404": { description: "CVE not found" },
+    },
+  };
+
+  async handle(
+    request: Request,
+    env: any,
+    ctx: any,
+    data: DataOf<typeof CVEFetchRoute.schema>
+  ) {
+    const cveId = data.params.cveId.toUpperCase();
 
     if (!/^CVE-\d{4}-\d+$/.test(cveId)) {
       return new Response("Invalid CVE format", { status: 400 });
@@ -9,12 +42,11 @@ export default {
 
     const key = `${cveId}.json`;
 
-    // Try fetching from R2 first
     try {
       const object = await env.R2.get(key);
       if (object) {
-        const data = await object.text();
-        return new Response(data, {
+        const text = await object.text();
+        return new Response(text, {
           headers: { "Content-Type": "application/json" },
         });
       }
@@ -24,15 +56,13 @@ export default {
 
     console.log(`📥 Fetching CVEs from NVD for ${cveId}`);
 
-    const nearbyIds = getNearbyCVEIds(cveId, 4); // 1 requested + 4 nearby
+    const nearbyIds = getNearbyCVEIds(cveId, 4);
     const enriched = await fetchAndEnrichCVEs(nearbyIds);
 
-    // Store them in R2
     await Promise.all(
       enriched.map(async (item) => {
-        const id = item.id;
         const content = JSON.stringify(item, null, 2);
-        await env.R2.put(`${id}.json`, content);
+        await env.R2.put(`${item.id}.json`, content);
       })
     );
 
@@ -44,7 +74,23 @@ export default {
     }
 
     return new Response("CVE not found", { status: 404 });
+  }
+}
+
+const router = OpenAPIRouter({
+  schema: {
+    info: {
+      title: "cve.tips API",
+      version: "1.0.0",
+    },
   },
+});
+
+router.get("/:cveId", CVEFetchRoute);
+router.all("*", () => new Response("Not Found", { status: 404 }));
+
+export default {
+  fetch: router.handle,
 };
 
 // Generate CVE IDs near the requested one (same year, next 4 numerically)
@@ -121,4 +167,6 @@ async function fetchEPSSBatch(cveIds) {
     return {};
   }
 }
+
 export { getNearbyCVEIds, fetchEPSSBatch };
+
