@@ -1,7 +1,7 @@
 {
   "name": "cve.tips",
   "version": "1.0.0",
-  "description": "",
+  "description": "Cloudflare Worker that serves CVE details enriched with EPSS scores, backed by an R2 cache.",
   "type": "module",
   "scripts": {
     "build": "tsc",
