@@ -42,10 +42,23 @@ npm run deploy:dry-run
 
 ## Continuous Integration and Deployment
 
-GitHub Actions runs `npm test` on every pull request and every push to `main`. When a push lands on `main`, the workflow deploys the Worker to Cloudflare after the test job succeeds.
+The repository uses a single GitHub Actions workflow at `.github/workflows/ci-cd.yml` so there is only one authoritative path from Codex changes to production deployment.
 
-Before enabling autonomous deployments, add this repository secret in GitHub:
+On every pull request and every push to `main`, the workflow:
 
-- `CLOUDFLARE_API_TOKEN`: a Cloudflare API token with permission to deploy the `cve-tips` Worker for the configured account.
+1. Installs dependencies with `npm ci` on Node.js 22.
+2. Builds and tests the Worker with `npm test`.
+3. Validates the Cloudflare Worker package with `npm run deploy:dry-run`.
+
+When a push lands on `main`, the production deployment job starts only after validation succeeds and publishes the Worker with `npm run deploy`. The deployment job is attached to the `production` GitHub environment, so any required environment secrets or branch protections can be managed in GitHub without changing the workflow.
+
+### Autonomous deployment checklist
+
+To support a fully autonomous Codex-to-deploy flow, keep the following repository settings in place:
+
+- Protect `main` and require the `Build, test, and package` workflow job to pass before merging.
+- Enable auto-merge for PRs that have the required checks and approvals satisfied.
+- Add the `CLOUDFLARE_API_TOKEN` secret to the `production` environment or repository secrets. The token needs permission to deploy the `cve-tips` Worker for the configured Cloudflare account.
+- Avoid mandatory manual reviewers on the `production` environment if the goal is hands-off deployment after merge.
 
 The production Worker and R2 binding are configured in `wrangler.toml`. A `preview` Wrangler environment is also defined for future non-production deploys.
