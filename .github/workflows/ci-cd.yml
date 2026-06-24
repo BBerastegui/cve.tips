@@ -7,13 +7,19 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: cve-tips-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_VERSION: 22
+
 jobs:
-  test:
-    name: Build and test
+  validate:
+    name: Build, test, and package
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
@@ -32,9 +38,12 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Validate Worker bundle
+        run: npm run deploy:dry-run
+
   deploy:
-    name: Deploy to Cloudflare Workers
-    needs: test
+    name: Deploy production Worker
+    needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -46,7 +55,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
