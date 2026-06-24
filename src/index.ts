@@ -6,6 +6,57 @@ import {
   DataOf,
 } from "@cloudflare/itty-router-openapi";
 
+interface Env {
+  R2: R2Bucket;
+}
+
+type CveRecord = {
+  id: string;
+  epss?: {
+    score: number;
+    percentile: number;
+  };
+  [key: string]: unknown;
+};
+
+type EpssMap = Record<string, NonNullable<CveRecord["epss"]>>;
+
+const INDEX_BODY = String.raw`
+                  _   _           
+  _____   _____  | |_(_)_ __  ___ 
+ / __\ \ / / _ \ | __| | '_ \/ __|
+| (__ \ V /  __/_| |_| | |_) \__ \
+ \___| \_/ \___(_)\__|_| .__/|___/
+                         |_|        
+
+CVE intelligence API
+
+Fetch CVE details enriched with EPSS scores and cached in Cloudflare R2.
+
+Usage:
+  GET /CVE-YYYY-NNNN
+
+Example:
+  curl https://cve.tips/CVE-2024-1234
+
+Responses:
+  200 application/json  CVE record with optional epss.score and epss.percentile
+  400 text/plain        Invalid CVE identifier
+  404 text/plain        CVE not found
+
+Docs:
+  GET /docs
+`;
+
+function indexResponse(): Response {
+  return new Response(INDEX_BODY, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+}
+
 class CVEFetchRoute extends OpenAPIRoute {
   static schema = {
     tags: ["CVE"],
@@ -30,8 +81,8 @@ class CVEFetchRoute extends OpenAPIRoute {
 
   async handle(
     request: Request,
-    env: any,
-    ctx: any,
+    env: Env,
+    ctx: ExecutionContext,
     data: DataOf<typeof CVEFetchRoute.schema>
   ) {
     const cveId = data.params.cveId.toUpperCase();
@@ -86,6 +137,7 @@ const router = OpenAPIRouter({
   },
 });
 
+router.get("/", indexResponse);
 router.get("/:cveId", CVEFetchRoute);
 router.all("*", () => new Response("Not Found", { status: 404 }));
 
@@ -94,7 +146,7 @@ export default {
 };
 
 // Generate CVE IDs near the requested one (same year, next 4 numerically)
-function getNearbyCVEIds(baseId, extra = 4) {
+function getNearbyCVEIds(baseId: string, extra = 4): string[] {
   const match = baseId.match(/^CVE-(\d{4})-(\d+)$/);
   if (!match) return [baseId];
   const year = match[1];
@@ -110,8 +162,8 @@ function getNearbyCVEIds(baseId, extra = 4) {
 }
 
 // Fetch CVEs from NVD and enrich with EPSS in batch
-async function fetchAndEnrichCVEs(cveIds) {
-  const enriched = [];
+async function fetchAndEnrichCVEs(cveIds: string[]): Promise<CveRecord[]> {
+  const enriched: CveRecord[] = [];
 
   for (const id of cveIds) {
     try {
@@ -122,7 +174,7 @@ async function fetchAndEnrichCVEs(cveIds) {
         continue;
       }
       const json = await res.json();
-      const item = json.vulnerabilities?.[0]?.cve;
+      const item = (json as { vulnerabilities?: Array<{ cve?: CveRecord }> }).vulnerabilities?.[0]?.cve;
       if (item) enriched.push(item);
     } catch (err) {
       console.warn(`⚠️ Error fetching ${id} from NVD`, err);
@@ -144,7 +196,7 @@ async function fetchAndEnrichCVEs(cveIds) {
 }
 
 // Fetch EPSS data for a list of CVE IDs in one call
-async function fetchEPSSBatch(cveIds) {
+async function fetchEPSSBatch(cveIds: string[]): Promise<EpssMap> {
   if (cveIds.length === 0) return {};
 
   const query = cveIds.map((id) => encodeURIComponent(id)).join(",");
@@ -153,9 +205,9 @@ async function fetchEPSSBatch(cveIds) {
   try {
     const res = await fetch(apiUrl);
     if (!res.ok) throw new Error(`EPSS fetch failed (${res.status})`);
-    const json = await res.json();
-    const map = {};
-    for (const item of json.data) {
+    const json = await res.json() as { data?: Array<{ cve: string; epss: string; percentile: string }> };
+    const map: EpssMap = {};
+    for (const item of json.data ?? []) {
       map[item.cve] = {
         score: parseFloat(item.epss),
         percentile: parseFloat(item.percentile),
