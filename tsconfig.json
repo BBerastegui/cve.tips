@@ -8,7 +8,13 @@
     "moduleResolution": "node",
     "strict": false,
     "allowJs": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": [
+      "@cloudflare/workers-types"
+    ]
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ]
 }
